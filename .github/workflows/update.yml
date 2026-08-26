@@ -1,0 +1,80 @@
+name: Daily ECOS Data Update
+
+on:
+  schedule:
+    # 한국 시간(KST, UTC+9) 기준 매일 오전 9시 정기 실행 (UTC 00:00)
+    - cron: '0 0 * * *'
+  # GitHub Actions 탭에서 수동 실행(Manual Trigger) 지원
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  update-ecos-data:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 저장소 체크아웃 (Checkout Repository)
+        uses: actions/checkout@v4
+
+      - name: 파이썬 환경 설정 (Setup Python)
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: 필수 라이브러리 설치 (Install Dependencies)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: ECOS 및 FRED 데이터 수집 & 분석 실행
+        env:
+          ECOS_API_KEY: ${{ secrets.ECOS_API_KEY }}
+          FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
+        run: |
+          echo "1. 국고채(3년) 데이터 수집..."
+          python fetch_ecos.py
+
+          echo "2. 국고채(10년) 데이터 수집..."
+          python fetch_ktb_10y.py
+
+          echo "3. 회사채(3년, AA-) 데이터 수집..."
+          python fetch_corp_aa_3y.py
+
+          echo "4. 원/달러 환율 데이터 수집..."
+          python fetch_usd_krw.py
+
+          echo "5. 미국 국채(10년물, 2년물) 데이터 수집..."
+          python fetch_fred.py
+
+          echo "6. 국고채 vs 회사채 신용 스프레드 병합 및 계산..."
+          python calculate_spread.py
+
+          echo "7. 기준금리 결정 이력 데이터 수집..."
+          python fetch_base_rate.py
+
+          echo "8. 환헤지 시나리오 손익 계산..."
+          python calc_fx_hedge_scenario.py
+
+          echo "9. 미국 국채 10Y-2Y 장단기 금리차 및 역전 분석..."
+          python calculate_us_spread.py
+
+      - name: 업데이트된 CSV 파일 자동 커밋 및 푸시 (Git Commit & Push)
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          
+          # 생성/수정된 CSV 파일 스테이징
+          git add *.csv
+          
+          # 변경사항이 있는 경우에만 커밋 및 푸시
+          if git diff --staged --quiet; then
+            echo "변경되거나 새로 추가된 데이터가 없습니다."
+          else
+            TODAY=$(date +'%Y-%m-%d')
+            git commit -m "Auto update: ECOS daily bond and FX data [$TODAY]"
+            git push
+            echo "데이터 커밋 및 푸시가 완료되었습니다."
+          fi
